@@ -9,7 +9,6 @@ void main() {
 
 class JKNQueueApp extends StatelessWidget {
   const JKNQueueApp({super.key});
-
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
@@ -25,7 +24,7 @@ class JKNQueueApp extends StatelessWidget {
   }
 }
 
-const String baseUrl = 'http://localhost:8000';
+const String baseUrl = 'http://10.0.2.2:5000';
 
 class QueueHome extends StatefulWidget {
   const QueueHome({super.key});
@@ -34,7 +33,8 @@ class QueueHome extends StatefulWidget {
   State<QueueHome> createState() => _QueueHomeState();
 }
 
-class _QueueHomeState extends State<QueueHome> with SingleTickerProviderStateMixin {
+class _QueueHomeState extends State<QueueHome>
+    with SingleTickerProviderStateMixin {
   QueueTicket? _ticket;
   bool _loading = false;
   String? _error;
@@ -50,35 +50,108 @@ class _QueueHomeState extends State<QueueHome> with SingleTickerProviderStateMix
     setState(() {
       _loading = true;
       _error = null;
+      _ticket = null;
     });
 
-    await Future.delayed(const Duration(seconds: 1)); // simulasi loading
+    double? predictedDuration;
+    try {
+      final url = Uri.parse('$baseUrl/api/v1/predict_duration');
+
+      final body = jsonEncode({
+        "tipe_faskes": "PUSKESMAS",
+        "kapasitas_harian": 50,
+        "spesialis": "Umum",
+        "waktu_datang_pasien": DateTime.now().toIso8601String()
+      });
+
+      final response = await http
+          .post(
+        url,
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+        },
+        body: body,
+      )
+          .timeout(const Duration(seconds: 10));
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        predictedDuration =
+            (data['predicted_service_duration_minutes'] as num).toDouble();
+        if (predictedDuration < 0) {
+          predictedDuration = 0.0;
+        }
+      } else {
+        final data = jsonDecode(response.body);
+        setState(() {
+          _error = data['message'] ?? 'Error server (${response.statusCode})';
+          _loading = false;
+        });
+        return;
+      }
+    } catch (e) {
+      setState(() {
+        _error =
+        'Gagal terhubung ke server. Pastikan server Flask berjalan dan URL benar (cek 10.0.2.2 untuk Android). Error: ${e.toString()}';
+        _loading = false;
+      });
+      return;
+    }
 
     setState(() {
       _ticket = QueueTicket(
-        ticketId: "A-001",
-        position: 5,
-        estimatedMinutes: 15,
-        estimatedRangeMin: 10,
-        estimatedRangeMax: 20,
+
+        estimatedMinutes: predictedDuration?.round(),
+
+        estimatedRangeMin:
+        predictedDuration != null ? (predictedDuration * 0.8).round() : null,
+        estimatedRangeMax:
+        predictedDuration != null ? (predictedDuration * 1.2).round() : null,
       );
       _loading = false;
     });
   }
 
-  Future<void> fetchEstimate(String ticketId) async {
-    try {
-      final url = Uri.parse('$baseUrl/api/v1/queue/$ticketId/estimate');
-      final resp = await http.get(url, headers: {'Accept': 'application/json'});
-      if (resp.statusCode == 200) {
-        final data = jsonDecode(resp.body);
-        final updated = QueueTicket.fromJson(data);
-        setState(() => _ticket = updated);
-      }
-    } catch (_) {}
-  }
+
+  // Future<void> fetchEstimate(String ticketId) async {}
 
   Widget buildActionCard() {
+    if (_error != null) {
+      return Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(Icons.error_outline, size: 80, color: Colors.amberAccent),
+          const SizedBox(height: 12),
+          const Text(
+            'Terjadi Kesalahan',
+            style: TextStyle(
+                fontSize: 20, color: Colors.white, fontWeight: FontWeight.w600),
+          ),
+          const SizedBox(height: 16),
+          Text(
+            _error!,
+            style: const TextStyle(color: Colors.white70, fontSize: 16),
+            textAlign: TextAlign.center,
+          ),
+          const SizedBox(height: 16),
+          ElevatedButton.icon(
+            onPressed: takeTicket,
+            icon: const Icon(Icons.refresh, color: Colors.white),
+            label: const Text('Coba Lagi',
+                style: TextStyle(color: Colors.white, fontSize: 18)),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.blueAccent,
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(30)),
+              padding:
+              const EdgeInsets.symmetric(vertical: 14, horizontal: 28),
+            ),
+          ),
+        ],
+      );
+    }
+
     if (_loading) {
       return const Center(child: CircularProgressIndicator(color: Colors.white));
     }
@@ -91,17 +164,21 @@ class _QueueHomeState extends State<QueueHome> with SingleTickerProviderStateMix
           const SizedBox(height: 12),
           const Text(
             'Belum memiliki antrian',
-            style: TextStyle(fontSize: 20, color: Colors.white, fontWeight: FontWeight.w600),
+            style: TextStyle(
+                fontSize: 20, color: Colors.white, fontWeight: FontWeight.w600),
           ),
           const SizedBox(height: 16),
           ElevatedButton.icon(
-            onPressed: takeTicket,
+            onPressed: takeTicket, // Panggil fungsi baru kita
             icon: const Icon(Icons.qr_code_2_rounded, color: Colors.white),
-            label: const Text('Ambil Antrian', style: TextStyle(color: Colors.white, fontSize: 18)),
+            label: const Text('Ambil Antrian',
+                style: TextStyle(color: Colors.white, fontSize: 18)),
             style: ElevatedButton.styleFrom(
               backgroundColor: Colors.blueAccent,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
-              padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 28),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(30)),
+              padding:
+              const EdgeInsets.symmetric(vertical: 14, horizontal: 28),
             ),
           ),
         ],
@@ -111,35 +188,19 @@ class _QueueHomeState extends State<QueueHome> with SingleTickerProviderStateMix
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-        Text(
-          'Nomor Antrian',
-          style: TextStyle(fontSize: 18, color: Colors.white.withOpacity(0.9)),
-        ),
-        Text(
-          _ticket!.ticketId,
-          style: const TextStyle(
-              fontSize: 38, fontWeight: FontWeight.bold, color: Colors.white),
-        ),
         const SizedBox(height: 8),
-        Text(
-          'Posisi Anda: ${_ticket!.position}',
-          style: const TextStyle(fontSize: 18, color: Colors.white70),
-        ),
         const SizedBox(height: 16),
         EstimateCard(ticket: _ticket!),
         const SizedBox(height: 20),
         ElevatedButton.icon(
-          onPressed: () {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('Estimasi diperbarui (dummy)')),
-            );
-          },
+          onPressed: takeTicket,
           icon: const Icon(Icons.refresh, color: Colors.white),
           label: const Text('Perbarui Estimasi',
               style: TextStyle(color: Colors.white, fontSize: 16)),
           style: ElevatedButton.styleFrom(
             backgroundColor: Colors.lightBlueAccent,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(25)),
+            shape:
+            RoundedRectangleBorder(borderRadius: BorderRadius.circular(25)),
             padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 20),
           ),
         ),
@@ -162,12 +223,12 @@ class _QueueHomeState extends State<QueueHome> with SingleTickerProviderStateMix
       appBar: AppBar(
         backgroundColor: Colors.blue.shade700,
         elevation: 0,
-        title: const Text('Antrian JKN Mobile', style: TextStyle(color: Colors.white)),
+        title: const Text('Antrian JKN Mobile',
+            style: TextStyle(color: Colors.white)),
         centerTitle: true,
       ),
       body: Stack(
         children: [
-          // Gradasi background atas bawah
           Container(
             decoration: BoxDecoration(
               gradient: LinearGradient(
@@ -205,15 +266,11 @@ class _QueueHomeState extends State<QueueHome> with SingleTickerProviderStateMix
 }
 
 class QueueTicket {
-  final String ticketId;
-  final int position;
   final int? estimatedMinutes;
   final int? estimatedRangeMin;
   final int? estimatedRangeMax;
 
   QueueTicket({
-    required this.ticketId,
-    required this.position,
     this.estimatedMinutes,
     this.estimatedRangeMin,
     this.estimatedRangeMax,
@@ -229,10 +286,8 @@ class QueueTicket {
     }
 
     return QueueTicket(
-      ticketId: json['ticket_id']?.toString() ?? 'unknown',
-      position: (json['position'] ?? 0) as int,
       estimatedMinutes:
-          json['estimated_minutes'] != null ? (json['estimated_minutes'] as num).toInt() : null,
+      json['estimated_minutes'] != null ? (json['estimated_minutes'] as num).toInt() : null,
       estimatedRangeMin: rangeMin,
       estimatedRangeMax: rangeMax,
     );
@@ -294,7 +349,7 @@ class EstimateCard extends StatelessWidget {
             borderRadius: BorderRadius.circular(10),
           ),
           const SizedBox(height: 12),
-          // 🔽 Bagian ini diubah jadi Column (vertikal)
+
           Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
